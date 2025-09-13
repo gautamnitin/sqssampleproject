@@ -1,15 +1,15 @@
-# SQS Employee Ingestion — Spring Boot + LocalStack + Swagger
+# SQS Employee Ingestion — Spring Boot + LocalStack + PostgreSQL
 
-This project demonstrates a high‑throughput SQS consumer using Spring Boot 3, Spring Cloud AWS SQS (3.x), and an H2 in‑memory database. It also includes a simple REST API to publish Employee messages to SQS and OpenAPI/Swagger UI for manual testing.
+This project demonstrates a high‑throughput SQS consumer using Spring Boot 3, Spring Cloud AWS SQS (3.x), and PostgreSQL as the application database. It also includes a simple REST API to publish Employee messages to SQS and OpenAPI/Swagger UI for manual testing.
 
 Contents
 - Prerequisites
 - How to run unit tests
-- Start LocalStack (Docker) with SQS
-- Configure the app to use LocalStack
+- Start Docker services (PostgreSQL + LocalStack SQS)
+- Configure the app to use LocalStack (SQS)
 - Run the application
 - Test via Swagger UI
-- Verify data in H2
+- Verify data in PostgreSQL
 - Test via cURL (optional)
 - Troubleshooting
 
@@ -25,7 +25,7 @@ Project entry points:
 - Swagger UI: provided by springdoc-openapi
 
 ## How to run unit tests
-The unit tests disable SQS at context startup, so they do not require AWS credentials or LocalStack.
+Unit tests are configured to use an in‑memory H2 database and to disable SQS at startup. No external services are required for tests.
 
 PowerShell (Windows):
 
@@ -40,10 +40,12 @@ Bash (macOS/Linux):
 ./mvnw clean test
 ```
 
-Expected result: 1 test runs and passes.
+Expected result: tests run and pass.
 
-## Start LocalStack (Docker) with SQS
-We provide a docker-compose file that starts LocalStack and automatically creates the `employee-queue` via an init script.
+## Start Docker services (PostgreSQL + LocalStack SQS)
+We provide a docker-compose file that starts:
+- PostgreSQL 16 (database `employeesdb`, user `postgres`, password `postgres`)
+- LocalStack (SQS)
 
 PowerShell:
 
@@ -55,17 +57,18 @@ docker compose up -d
 docker compose ps
 ```
 
-LocalStack is exposed at `http://localhost:4566`.
+- PostgreSQL: `localhost:5432`
+- LocalStack SQS: `http://localhost:4566`
 
-Optional: verify queue (requires AWS CLI):
+Optional: verify SQS queue (requires AWS CLI):
 
 ```powershell
 aws --endpoint-url http://localhost:4566 sqs list-queues
 ```
 
-You should see `employee-queue` in the output. The init script lives at `localstack/ready.d/01-create-queues.sh`.
+The queue `employee-queue` is created by the init script at `localstack/ready.d/01-create-queues.sh`.
 
-## Configure the app to use LocalStack
+## Configure the app to use LocalStack (SQS)
 The application uses an endpoint override when `app.sqs.endpoint` is set. For LocalStack, set it to `http://localhost:4566`.
 
 Options to configure:
@@ -76,18 +79,18 @@ Options to configure:
 2) Environment variable (Spring Boot maps kebab-case to upper snake case)
 - `APP_SQS_ENDPOINT=http://localhost:4566`
 
-3) Temporary change in `src/main/resources/application.properties`
-- Uncomment and set `app.sqs.endpoint=http://localhost:4566`
+3) Property file override
+- `app.sqs.endpoint=http://localhost:4566` in `src/main/resources/application.properties`
 
 Note: Option 1 or 2 is preferred to avoid committing local changes.
 
 ## Run the application
-Use Maven Spring Boot plugin:
+By default, the app is configured to use PostgreSQL at `jdbc:postgresql://localhost:5432/employeesdb` with `postgres/postgres`.
 
 PowerShell:
 
 ```powershell
-# Using command-line properties (recommended)
+# Using command-line properties (recommended for SQS)
 ./mvnw.cmd spring-boot:run -Dspring-boot.run.arguments="--app.sqs.endpoint=http://localhost:4566"
 ```
 
@@ -98,7 +101,7 @@ $env:APP_SQS_ENDPOINT = "http://localhost:4566"
 ./mvnw.cmd spring-boot:run
 ```
 
-When starting, the app will connect to LocalStack SQS. The queue `employee-queue` should already exist from the init script.
+When starting, the app will connect to LocalStack SQS and to the local PostgreSQL container.
 
 ## Test via Swagger UI
 Swagger UI is available once the app is running.
@@ -143,20 +146,22 @@ Batch employees:
 ]
 ```
 
-On submit, the REST controller publishes the message(s) to SQS. The SQS listener (`@SqsListener`) consumes them in batches and upserts records into H2 using JPA with batching enabled.
+On submit, the REST controller publishes the message(s) to SQS. The SQS listener (`@SqsListener`) consumes them in batches and upserts records into PostgreSQL using Spring Data JPA with batching enabled.
 
-## Verify data in H2
-H2 console is enabled.
+## Verify data in PostgreSQL
+Connect with any Postgres client (psql, DBeaver, etc.). Default credentials:
 
-- Open: http://localhost:8080/h2-console
-- JDBC URL: `jdbc:h2:mem:employeesdb;DB_CLOSE_DELAY=-1;MODE=PostgreSQL`
-- User: `sa`
-- Password: (empty)
+- Host: `localhost`
+- Port: `5432`
+- Database: `employeesdb`
+- User: `postgres`
+- Password: `postgres`
 
-Query example:
+Example (psql):
 
-```sql
-SELECT id, first_name, last_name, email, department, hired_at FROM employees;
+```powershell
+# Windows PowerShell using Docker's psql inside the container
+docker exec -it postgres-db psql -U postgres -d employeesdb -c "SELECT id, first_name, last_name, email, department, hired_at FROM employees;"
 ```
 
 You should see the records sent from Swagger.
@@ -194,8 +199,8 @@ curl -X POST http://localhost:8080/api/sqs/employees/batch `
   ```powershell
   aws --endpoint-url http://localhost:4566 sqs create-queue --queue-name employee-queue
   ```
-- Tests failing due to SQS: unit test already disables SQS listener; re-run `./mvnw.cmd clean test`.
-- H2 console login: use the exact JDBC URL above; username `sa`, no password.
+- Database connection errors: ensure the `postgres` container is healthy (`docker compose ps`) and the connection information in `application.properties` matches the docker-compose service.
+- Tests failing due to DB: tests use in‑memory H2 automatically via test-specific overrides in `InternalapiApplicationTests`.
 
 ---
 Happy testing!

@@ -14,10 +14,11 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
+@SequenceGenerator(name = "employee_seq", sequenceName = "employees_id_seq", allocationSize = 1)
 public class Employee {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "employee_seq")
     private Long id;
 
     @Column(nullable = false)

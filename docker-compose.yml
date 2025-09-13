@@ -1,5 +1,22 @@
 version: '3.8'
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    environment:
+      - POSTGRES_DB=employeesdb
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d employeesdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   localstack:
     image: localstack/localstack:latest
     container_name: localstack-sqs
@@ -11,3 +28,6 @@ services:
       - AWS_DEFAULT_REGION=us-east-1
     volumes:
       - "./localstack/ready.d:/etc/localstack/init/ready.d"  # scripts executed when LS is ready
+
+volumes:
+  pgdata:

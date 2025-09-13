@@ -6,49 +6,33 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class EmployeeService {
 
-    private final EmployeeRepository repository;
+    private final EmployeeJdbcRepository jdbcRepository;
 
-    // Batch upsert by email for idempotency
+    // Bulk upsert by email for idempotency using one DB connection via JdbcTemplate.batchUpdate
+    @Transactional
+    public void bulkUpsert(List<Employee> employees) {
+        if (employees == null || employees.isEmpty()) return;
+
+        // Filter invalid entries (require email, firstName, lastName per schema constraints)
+        List<Employee> valid = new ArrayList<>();
+        for (Employee e : employees) {
+            if (e == null) continue;
+            if (e.getEmail() == null || e.getFirstName() == null || e.getLastName() == null) continue;
+            valid.add(e);
+        }
+        if (valid.isEmpty()) return;
+
+        jdbcRepository.bulkUpsert(valid);
+    }
+
+    // Backward compatibility: delegate to the new method
     @Transactional
     public void upsertEmployees(List<Employee> incoming) {
-        if (incoming == null || incoming.isEmpty()) return;
-
-        // Map incoming by email
-        Map<String, Employee> byEmail = incoming.stream()
-                .filter(e -> e.getEmail() != null)
-                .collect(Collectors.toMap(Employee::getEmail, Function.identity(), (a, b) -> b));
-
-        // Load existing by emails
-        List<String> emails = new ArrayList<>(byEmail.keySet());
-        if (emails.isEmpty()) return;
-
-        List<Employee> toSave = new ArrayList<>();
-
-        // Find existing and update fields using single IN query
-        repository.findAllByEmailIn(emails).forEach(existing -> {
-            Employee incomingEmp = byEmail.remove(existing.getEmail());
-            if (incomingEmp != null) {
-                existing.setFirstName(incomingEmp.getFirstName());
-                existing.setLastName(incomingEmp.getLastName());
-                existing.setDepartment(incomingEmp.getDepartment());
-                existing.setHiredAt(incomingEmp.getHiredAt());
-                toSave.add(existing);
-            }
-        });
-
-        // New ones
-        toSave.addAll(byEmail.values());
-
-        if (!toSave.isEmpty()) {
-            repository.saveAll(toSave);
-        }
+        bulkUpsert(incoming);
     }
 }
