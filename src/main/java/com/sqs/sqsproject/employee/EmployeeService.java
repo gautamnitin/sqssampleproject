@@ -11,7 +11,7 @@ import java.util.List;
 @RequiredArgsConstructor
 public class EmployeeService {
 
-    private final EmployeeJdbcRepository jdbcRepository;
+    private final EmployeeJooqRepository repository;
 
     // Bulk upsert by email for idempotency using one DB connection via JdbcTemplate.batchUpdate
     @Transactional
@@ -27,7 +27,7 @@ public class EmployeeService {
         }
         if (valid.isEmpty()) return;
 
-        jdbcRepository.bulkUpsert(valid);
+        repository.bulkUpsert(valid);
     }
 
     // Backward compatibility: delegate to the new method
