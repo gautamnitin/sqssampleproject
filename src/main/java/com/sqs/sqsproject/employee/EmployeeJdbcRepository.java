@@ -22,6 +22,8 @@ public class EmployeeJdbcRepository {
      * Performs bulk upsert (insert/update) by unique email using JDBC batchUpdate for efficiency.
      * Uses Postgres ON CONFLICT for idempotency. Returns per-row update counts from the last batch.
      */
+
+    // Need to make it more generic
     public int[] bulkUpsert(List<Employee> employees) {
         if (employees == null || employees.isEmpty()) return new int[0];
 
