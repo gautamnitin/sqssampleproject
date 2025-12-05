@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
  * Sample transformer for Employee messages that adds a status prefix to the employee name.
  * This demonstrates how to implement a custom transformer for specific message types.
  */
-@Component
+@Component("employeeStatusTransformer")
 @Slf4j
 public class EmployeeStatusTransformer implements MessageTransformer<Employee> {
 

@@ -24,8 +24,11 @@ app.sqs.replay.queues.employee.sourceQueue=employee-queue-dlq
 app.sqs.replay.queues.employee.targetQueue=employee-queue
 app.sqs.replay.queues.employee.messageType=com.sqs.sqsproject.employee.Employee
 app.sqs.replay.queues.employee.batchSize=10
-# Optional transformer class
+# Optional transformer - can be specified in two ways:
+# Option 1: Using fully qualified class name
 app.sqs.replay.queues.employee.transformerClass=com.sqs.sqsproject.replay.transform.EmployeeStatusTransformer
+# Option 2: Using Spring bean name (prefixed with '@')
+# app.sqs.replay.queues.employee.transformerClass=@employeeStatusTransformer
 
 # Another example configuration
 app.sqs.replay.queues.order.sourceQueue=order-queue-dlq
@@ -101,7 +104,7 @@ Response:
 To create a custom transformer, implement the `MessageTransformer` interface:
 
 ```java
-@Component
+@Component("customTransformer")  // Optional: Specify a bean name
 public class CustomTransformer implements MessageTransformer<YourMessageType> {
     @Override
     public YourMessageType transform(YourMessageType message) {
@@ -111,11 +114,26 @@ public class CustomTransformer implements MessageTransformer<YourMessageType> {
 }
 ```
 
-Then configure it in your `application.properties`:
+Then configure it in your `application.properties` using one of two approaches:
+
+### Option 1: Using fully qualified class name (original approach)
 
 ```properties
 app.sqs.replay.queues.yourQueue.transformerClass=com.your.package.CustomTransformer
 ```
+
+### Option 2: Using Spring bean name (new approach)
+
+If you've specified a bean name in your `@Component` annotation, you can reference it directly:
+
+```properties
+app.sqs.replay.queues.yourQueue.transformerClass=@customTransformer
+```
+
+The bean name approach has several advantages:
+- It uses Spring's dependency injection to get the transformer instance
+- The transformer can have its own dependencies injected
+- It avoids creating new instances via reflection
 
 If no transformer is specified, messages will be replayed without transformation.
 
@@ -173,8 +191,15 @@ To set up automatic scheduled replay:
 - `ScheduledReplayService`: Service that automatically replays messages at fixed intervals
 - `ReplayController`: REST controller for manual replay operations
 - `MessageTransformer`: Interface for message transformation
-- `ClassLoaderUtil`: Utility for dynamic class loading
+- `ClassLoaderUtil`: Utility for dynamic class loading and bean retrieval
 - `ReplayProperties`: Configuration properties with support for scheduled replay
+
+### ClassLoaderUtil
+
+The `ClassLoaderUtil` class provides two ways to get transformer instances:
+
+1. `createTransformer(String transformerClassName, Class<T> messageType)`: Creates a new instance of the transformer using reflection (original approach)
+2. `getTransformer(String transformerNameOrClass, Class<T> messageType)`: Gets a transformer either by bean name (prefixed with '@') or by class name
 
 ## Error Handling
 

@@ -59,8 +59,8 @@ public class ReplayService {
             // Load the message type class
             Class<?> messageTypeClass = classLoaderUtil.loadClass(queueConfig.getMessageType());
             
-            // Create the appropriate transformer
-            MessageTransformer<?> transformer = classLoaderUtil.createTransformer(
+            // Get the appropriate transformer (either by bean name or by class name)
+            MessageTransformer<?> transformer = classLoaderUtil.getTransformer(
                     queueConfig.getTransformerClass(), messageTypeClass);
             
             // Process the messages with the correct types
