@@ -53,7 +53,8 @@ public class ScheduledReplayService {
                 }
                 
                 log.info("Processing scheduled replay for queue: {}", queueId);
-                int processedCount = replayService.replayMessages(queueId, config.getMaxMessages());
+                Integer max = config.isReplayAll() ? -1 : config.getMaxMessages();
+                int processedCount = replayService.replayMessages(queueId, max);
                 log.info("Scheduled replay for queue {} processed {} message(s)", queueId, processedCount);
                 
             } catch (Exception e) {

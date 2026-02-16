@@ -52,8 +52,13 @@ public class ReplayService {
             throw new IllegalArgumentException("Queue configuration not found: " + queueConfigId);
         }
 
-        int batchSize = maxMessages != null ? maxMessages : queueConfig.getBatchSize();
-        log.info("Replaying up to {} messages from {} to {}", batchSize, queueConfig.getSourceQueue(), queueConfig.getTargetQueue());
+        boolean replayAll = maxMessages != null && maxMessages <= 0;
+        int limit = replayAll ? Integer.MAX_VALUE : (maxMessages != null ? maxMessages : queueConfig.getBatchSize());
+        if (replayAll) {
+            log.info("Replaying ALL available messages from {} to {}", queueConfig.getSourceQueue(), queueConfig.getTargetQueue());
+        } else {
+            log.info("Replaying up to {} messages from {} to {}", limit, queueConfig.getSourceQueue(), queueConfig.getTargetQueue());
+        }
 
         try {
             // Load the message type class
@@ -64,7 +69,7 @@ public class ReplayService {
                     queueConfig.getTransformerClass(), messageTypeClass);
             
             // Process the messages with the correct types
-            return processMessages(queueConfig, messageTypeClass, transformer, batchSize);
+            return processMessages(queueConfig, messageTypeClass, transformer, limit);
         } catch (ClassNotFoundException e) {
             log.error("Failed to load message type class: {}", queueConfig.getMessageType(), e);
             throw new RuntimeException("Failed to load message type class", e);
@@ -85,50 +90,75 @@ public class ReplayService {
     private <T> int processMessages(ReplayProperties.QueueConfig queueConfig, Class<?> messageTypeClass,
                                    MessageTransformer<?> transformer, int maxMessages) {
         try {
-            // Receive messages from the source queue
-            List<Message> messages = receiveMessages(queueConfig.getSourceQueue(), maxMessages);
-            if (messages.isEmpty()) {
-                log.info("No messages found in source queue: {}", queueConfig.getSourceQueue());
-                return 0;
-            }
+            int processedTotal = 0;
+            int remaining = maxMessages;
 
-            log.info("Received {} messages from source queue: {}", messages.size(), queueConfig.getSourceQueue());
-            
-            List<String> processedReceiptHandles = new ArrayList<>();
-            int successCount = 0;
+            while (processedTotal < maxMessages) {
+                int perRequest = Math.min(remaining, 10); // SQS hard limit
+                if (perRequest <= 0) {
+                    break;
+                }
 
-            // Process each message
-            for (Message message : messages) {
-                try {
-                    // Convert the message body to the target type
-                    T typedMessage = (T) objectMapper.readValue(message.body(), messageTypeClass);
-                    
-                    // Transform the message
-                    T transformedMessage = (T) ((MessageTransformer<T>) transformer).transform(typedMessage);
-                    
-                    // Send the transformed message to the target queue
-                    sqsTemplate.send(builder -> 
-                        builder.queue(queueConfig.getTargetQueue())
-                               .payload(transformedMessage)
-                    );
-                    
-                    // Mark as processed
-                    processedReceiptHandles.add(message.receiptHandle());
-                    successCount++;
-                    
-                    log.debug("Successfully replayed message: {}", message.messageId());
-                } catch (Exception e) {
-                    log.error("Failed to process message: {}", message.messageId(), e);
+                // Receive a single batch from the source queue (streaming, not accumulating)
+                List<Message> batch = receiveMessages(queueConfig.getSourceQueue(), perRequest);
+                if (batch == null || batch.isEmpty()) {
+                    if (processedTotal == 0) {
+                        log.info("No messages found in source queue: {}", queueConfig.getSourceQueue());
+                    }
+                    break; // queue drained for now
+                }
+
+                List<String> processedReceiptHandles = new ArrayList<>();
+
+                // Process each message in the batch
+                for (Message message : batch) {
+                    try {
+                        // Convert the message body to the target type
+                        T typedMessage = (T) objectMapper.readValue(message.body(), messageTypeClass);
+
+                        // Transform the message
+                        T transformedMessage = (T) ((MessageTransformer<T>) transformer).transform(typedMessage);
+
+                        // Send the transformed message to the target queue
+                        sqsTemplate.send(builder ->
+                                builder.queue(queueConfig.getTargetQueue())
+                                        .payload(transformedMessage)
+                        );
+
+                        // Mark as processed
+                        processedReceiptHandles.add(message.receiptHandle());
+                        processedTotal++;
+                        remaining = Math.max(0, maxMessages - processedTotal);
+
+                        if (processedTotal % 1000 == 0) {
+                            log.info("Replayed {} messages so far from {} to {}", processedTotal, queueConfig.getSourceQueue(), queueConfig.getTargetQueue());
+                        } else {
+                            log.debug("Successfully replayed message: {}", message.messageId());
+                        }
+
+                        // Stop early if we've reached the requested limit within this batch
+                        if (processedTotal >= maxMessages) {
+                            // We will delete processed ones and exit the outer loop
+                            continue;
+                        }
+                    } catch (Exception e) {
+                        log.error("Failed to process message: {}", message.messageId(), e);
+                    }
+                }
+
+                // Delete successfully processed messages from the source queue (per batch)
+                if (!processedReceiptHandles.isEmpty()) {
+                    deleteMessages(queueConfig.getSourceQueue(), batch, processedReceiptHandles);
+                }
+
+                // If we received fewer messages than requested, the queue is likely drained for now
+                if (batch.size() < perRequest) {
+                    break;
                 }
             }
-            
-            // Delete successfully processed messages from the source queue
-            if (!processedReceiptHandles.isEmpty()) {
-                deleteMessages(queueConfig.getSourceQueue(), messages, processedReceiptHandles);
-            }
-            
-            log.info("Successfully replayed {} out of {} messages", successCount, messages.size());
-            return successCount;
+
+            log.info("Successfully replayed {} message(s) from {} to {}", processedTotal, queueConfig.getSourceQueue(), queueConfig.getTargetQueue());
+            return processedTotal;
         } catch (Exception e) {
             log.error("Failed to process messages", e);
             throw new RuntimeException("Failed to process messages", e);

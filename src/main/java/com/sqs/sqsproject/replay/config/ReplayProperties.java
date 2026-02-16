@@ -55,6 +55,12 @@ public class ReplayProperties {
         private int maxMessages = 50;
         
         /**
+         * When true, the scheduled job will attempt to replay all available messages
+         * in the eligible queues (drain the DLQ) instead of limiting to maxMessages.
+         */
+        private boolean replayAll = false;
+        
+        /**
          * Set of queue configuration IDs that are eligible for scheduled replay
          */
         private Set<String> eligibleQueueIds = new HashSet<>();
