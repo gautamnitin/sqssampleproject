@@ -5,6 +5,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Service that automatically replays messages from DLQs at fixed intervals.
@@ -17,6 +18,7 @@ public class ScheduledReplayService {
 
     private final ReplayService replayService;
     private final ReplayProperties replayProperties;
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
     /**
      * Scheduled method that runs at a fixed rate to replay messages from eligible DLQs.
@@ -27,42 +29,51 @@ public class ScheduledReplayService {
             initialDelayString = "${app.sqs.replay.scheduled.initial-delay-ms:60000}"
     )
     public void replayEligibleQueues() {
-        ReplayProperties.ScheduledReplayConfig config = replayProperties.getScheduled();
-        
-        // Skip if replay functionality or scheduled replay is disabled
-        if (!replayProperties.isEnabled() || !config.isEnabled()) {
-            log.debug("Scheduled replay is disabled, skipping execution");
+        // Ensure we don't start a new run if the previous run is still in progress
+        if (!running.compareAndSet(false, true)) {
+            log.warn("Scheduled replay is already running, skipping this execution");
             return;
         }
-
-        // Skip if no eligible queues are configured
-        if (config.getEligibleQueueIds().isEmpty()) {
-            log.debug("No eligible queues configured for scheduled replay");
-            return;
-        }
-
-        log.info("Starting scheduled replay for {} eligible queue(s)", config.getEligibleQueueIds().size());
-        
-        // Process each eligible queue
-        for (String queueId : config.getEligibleQueueIds()) {
-            try {
-                // Skip if queue configuration doesn't exist
-                if (!replayProperties.getQueues().containsKey(queueId)) {
-                    log.warn("Queue configuration not found for ID: {}, skipping", queueId);
-                    continue;
-                }
-                
-                log.info("Processing scheduled replay for queue: {}", queueId);
-                Integer max = config.isReplayAll() ? -1 : config.getMaxMessages();
-                int processedCount = replayService.replayMessages(queueId, max);
-                log.info("Scheduled replay for queue {} processed {} message(s)", queueId, processedCount);
-                
-            } catch (Exception e) {
-                // Log error but continue with next queue
-                log.error("Failed to process scheduled replay for queue: {}", queueId, e);
+        try {
+            ReplayProperties.ScheduledReplayConfig config = replayProperties.getScheduled();
+            
+            // Skip if replay functionality or scheduled replay is disabled
+            if (!replayProperties.isEnabled() || !config.isEnabled()) {
+                log.debug("Scheduled replay is disabled, skipping execution");
+                return;
             }
+
+            // Skip if no eligible queues are configured
+            if (config.getEligibleQueueIds().isEmpty()) {
+                log.debug("No eligible queues configured for scheduled replay");
+                return;
+            }
+
+            log.info("Starting scheduled replay for {} eligible queue(s)", config.getEligibleQueueIds().size());
+            
+            // Process each eligible queue
+            for (String queueId : config.getEligibleQueueIds()) {
+                try {
+                    // Skip if queue configuration doesn't exist
+                    if (!replayProperties.getQueues().containsKey(queueId)) {
+                        log.warn("Queue configuration not found for ID: {}, skipping", queueId);
+                        continue;
+                    }
+                    
+                    log.info("Processing scheduled replay for queue: {}", queueId);
+                    Integer max = config.isReplayAll() ? -1 : config.getMaxMessages();
+                    int processedCount = replayService.replayMessages(queueId, max);
+                    log.info("Scheduled replay for queue {} processed {} message(s)", queueId, processedCount);
+                    
+                } catch (Exception e) {
+                    // Log error but continue with next queue
+                    log.error("Failed to process scheduled replay for queue: {}", queueId, e);
+                }
+            }
+            
+            log.info("Completed scheduled replay execution");
+        } finally {
+            running.set(false);
         }
-        
-        log.info("Completed scheduled replay execution");
     }
 }
