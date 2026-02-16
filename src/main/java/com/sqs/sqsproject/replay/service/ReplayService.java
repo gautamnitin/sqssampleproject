@@ -143,16 +143,42 @@ public class ReplayService {
      * @return the list of received messages
      */
     private List<Message> receiveMessages(String queueName, int maxMessages) {
+        List<Message> allMessages = new ArrayList<>();
         try {
-            ReceiveMessageRequest receiveRequest = ReceiveMessageRequest.builder()
-                    .queueUrl(queueName)
-                    .maxNumberOfMessages(Math.min(maxMessages, 10)) // SQS limits to 10 messages per request
-                    .waitTimeSeconds(5)
-                    .build();
+            // SQS returns up to 10 messages per ReceiveMessage call. Loop until we collect the requested amount
+            // or there are no more messages available at the moment.
+            while (allMessages.size() < maxMessages) {
+                int remaining = maxMessages - allMessages.size();
+                int perRequest = Math.min(remaining, 10); // SQS hard limit per request
 
-            return sqsAsyncClient.receiveMessage(receiveRequest)
-                    .get()
-                    .messages();
+                if (perRequest <= 0) {
+                    break;
+                }
+
+                ReceiveMessageRequest receiveRequest = ReceiveMessageRequest.builder()
+                        .queueUrl(queueName)
+                        .maxNumberOfMessages(perRequest)
+                        .waitTimeSeconds(5)
+                        .build();
+
+                List<Message> batch = sqsAsyncClient.receiveMessage(receiveRequest)
+                        .get()
+                        .messages();
+
+                if (batch == null || batch.isEmpty()) {
+                    // No more messages available right now
+                    break;
+                }
+
+                allMessages.addAll(batch);
+
+                // If fewer than requested came back, likely queue is drained for now
+                if (batch.size() < perRequest) {
+                    break;
+                }
+            }
+
+            return allMessages;
         } catch (Exception e) {
             log.error("Failed to receive messages from queue: {}", queueName, e);
             throw new RuntimeException("Failed to receive messages", e);
@@ -185,23 +211,30 @@ public class ReplayService {
             }
             
             if (!entries.isEmpty()) {
-                DeleteMessageBatchRequest deleteRequest = DeleteMessageBatchRequest.builder()
-                        .queueUrl(queueName)
-                        .entries(entries)
-                        .build();
-                
-                CompletableFuture<Void> future = sqsAsyncClient.deleteMessageBatch(deleteRequest)
-                        .thenAccept(response -> {
-                            if (!response.failed().isEmpty()) {
-                                log.warn("Failed to delete {} messages", response.failed().size());
-                                response.failed().forEach(failed -> 
-                                    log.warn("Failed to delete message: {} - {}", failed.id(), failed.code())
-                                );
-                            }
-                        });
-                
-                // Wait for deletion to complete
-                future.join();
+                // SQS DeleteMessageBatch supports up to 10 entries per request. Send in chunks.
+                int chunkSize = 10;
+                for (int start = 0; start < entries.size(); start += chunkSize) {
+                    int end = Math.min(start + chunkSize, entries.size());
+                    List<DeleteMessageBatchRequestEntry> chunk = entries.subList(start, end);
+
+                    DeleteMessageBatchRequest deleteRequest = DeleteMessageBatchRequest.builder()
+                            .queueUrl(queueName)
+                            .entries(chunk)
+                            .build();
+                    
+                    CompletableFuture<Void> future = sqsAsyncClient.deleteMessageBatch(deleteRequest)
+                            .thenAccept(response -> {
+                                if (!response.failed().isEmpty()) {
+                                    log.warn("Failed to delete {} messages", response.failed().size());
+                                    response.failed().forEach(failed -> 
+                                        log.warn("Failed to delete message: {} - {}", failed.id(), failed.code())
+                                    );
+                                }
+                            });
+                    
+                    // Wait for deletion of this chunk to complete before moving to next
+                    future.join();
+                }
             }
         } catch (Exception e) {
             log.error("Failed to delete messages from queue: {}", queueName, e);
